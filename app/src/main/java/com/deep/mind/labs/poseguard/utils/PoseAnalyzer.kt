@@ -11,6 +11,7 @@ import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseDetection
 import com.google.mlkit.vision.pose.PoseLandmark
 import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
+import kotlin.math.min
 
 class PoseAnalyzer(private val viewModel: CameraViewModel) {
 
@@ -23,7 +24,12 @@ class PoseAnalyzer(private val viewModel: CameraViewModel) {
     private val detector = PoseDetection.getClient(options)
 
     @OptIn(ExperimentalGetImage::class)
-    fun analyze(imageProxy: ImageProxy, pWidth: Float, pHeight: Float) {
+    fun analyze(imageProxy: ImageProxy, viewWidth: Float, viewHeight: Float, isFrontCamera: Boolean = true) {
+        if (viewWidth <= 0f || viewHeight <= 0f) {
+            imageProxy.close()
+            return
+        }
+
         val mediaImage = imageProxy.image ?: run {
             imageProxy.close()
             return
@@ -34,7 +40,14 @@ class PoseAnalyzer(private val viewModel: CameraViewModel) {
 
         detector.process(inputImage)
             .addOnSuccessListener { pose ->
-                handlePose(pose, imageProxy.width.toFloat(), imageProxy.height.toFloat(),pWidth,pHeight)
+                handlePose(
+                    pose,
+                    imageProxy.width.toFloat(),
+                    imageProxy.height.toFloat(),
+                    viewWidth,
+                    viewHeight,
+                    isFrontCamera
+                )
                 imageProxy.close()
             }
             .addOnFailureListener { e ->
@@ -43,66 +56,34 @@ class PoseAnalyzer(private val viewModel: CameraViewModel) {
             }
     }
 
-    fun mapToViewCoordinates(
-        landmarkX: Float,
-        landmarkY: Float,
-        imageWidth: Float,
-        imageHeight: Float,
-        viewWidth: Float,
-        viewHeight: Float,
-        isFrontCamera: Boolean = true
-    ): Offset {
-        val scaleX = viewWidth / imageWidth
-        val scaleY = viewHeight / imageHeight
-
-        val x = if (isFrontCamera) viewWidth - (landmarkX * scaleX) else landmarkX * scaleX
-        val y = landmarkY * scaleY
-
-        return Offset(x, y)
-    }
-
-
-
     private fun handlePose(
         pose: Pose,
         imageWidth: Float,
         imageHeight: Float,
-        viewWidth: Float,
-        viewHeight: Float
+        canvasWidth: Float,
+        canvasHeight: Float,
+        isFrontCamera: Boolean
     ) {
+        val scale = min(canvasWidth / imageWidth, canvasHeight / imageHeight)
+        val offsetX = (canvasWidth - imageWidth * scale) / 2f
+        val offsetY = (canvasHeight - imageHeight * scale) / 2f
 
-        val leftWrist = pose.getPoseLandmark(PoseLandmark.LEFT_WRIST)
-        val rightWrist = pose.getPoseLandmark(PoseLandmark.RIGHT_WRIST)
-        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
-        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
-        val head = pose.getPoseLandmark(PoseLandmark.NOSE)
+        fun PoseLandmark?.toCanvas(): Offset? {
+            if (this == null || inFrameLikelihood < MIN_LIKELIHOOD) return null
+            val scaledX = position.x * scale
+            val scaledY = position.y * scale
+            val canvasX = if (isFrontCamera) (imageWidth * scale - scaledX) + offsetX else scaledX + offsetX
+            val canvasY = scaledY + offsetY
+            return Offset(canvasX, canvasY)
+        }
 
-        // Only use landmarks if likelihood > threshold
-        val leftOffset = if (leftWrist != null && leftWrist.inFrameLikelihood >= MIN_LIKELIHOOD) {
-            mapToViewCoordinates(leftWrist.position.x, leftWrist.position.y, imageWidth, imageHeight, viewWidth, viewHeight)
-        } else null
+        val leftWrist = pose.getPoseLandmark(PoseLandmark.LEFT_WRIST).toCanvas()
+        val rightWrist = pose.getPoseLandmark(PoseLandmark.RIGHT_WRIST).toCanvas()
+        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER).toCanvas()
+        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER).toCanvas()
+        val head = pose.getPoseLandmark(PoseLandmark.NOSE).toCanvas()
 
-        val rightOffset = if (rightWrist != null && rightWrist.inFrameLikelihood >= MIN_LIKELIHOOD) {
-            mapToViewCoordinates(rightWrist.position.x, rightWrist.position.y, imageWidth, imageHeight, viewWidth, viewHeight)
-        } else null
-
-        val leftSOffset = if (leftShoulder != null && leftShoulder.inFrameLikelihood >= MIN_LIKELIHOOD) {
-            mapToViewCoordinates(leftShoulder.position.x, leftShoulder.position.y, imageWidth, imageHeight, viewWidth, viewHeight)
-        } else null
-
-        val rightSOffset = if (rightShoulder != null && rightShoulder.inFrameLikelihood >= MIN_LIKELIHOOD) {
-            mapToViewCoordinates(rightShoulder.position.x, rightShoulder.position.y, imageWidth, imageHeight, viewWidth, viewHeight)
-        } else null
-
-        val headOffset = if (head != null && head.inFrameLikelihood >= MIN_LIKELIHOOD) {
-            mapToViewCoordinates(head.position.x, head.position.y, imageWidth, imageHeight, viewWidth, viewHeight)
-        } else null
-
-        viewModel.updateLandmarks(leftOffset, leftSOffset, rightOffset, rightSOffset, headOffset)
+        viewModel.updateLandmarks(leftWrist, leftShoulder, rightWrist, rightShoulder, head)
     }
 
-
 }
-
-
-

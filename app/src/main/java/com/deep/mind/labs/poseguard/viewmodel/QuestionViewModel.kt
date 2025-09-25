@@ -43,7 +43,7 @@ class QuestionViewModel(application: Application) : AndroidViewModel(application
         tts = TextToSpeech(application, this)
     }
 
-    
+
     fun initializeTts(onInitialized: () -> Unit) {
         if (isTtsReady) {
             onInitialized()
